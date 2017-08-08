@@ -1,0 +1,8 @@
+/Makefile
+/CMakeCache.txt
+/CMakeFiles
+cmake_install.cmake
+config.h
+
+indi_skypointer
+indi_skypointer.xml
