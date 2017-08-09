@@ -2,16 +2,14 @@
 #include "skypointer.h"
 #include "skypointer_driver.h"
 
-#include <libnova/sidereal_time.h>
-#include <libnova/julian_day.h>
-
 #include <cmath>
 #include <memory>
+
+using namespace INDI::AlignmentSubsystem;
 
 //const float SIDE_RATE = 0.004178; /* sidereal rate, degrees/s */
 const int SLEW_RATE = 1;        /* slew rate, degrees/s */
 const int POLLMS    = 250;      /* poll period, ms */
-
 
 std::unique_ptr<SkyPointer> skyPointer(new SkyPointer());
 
@@ -39,14 +37,7 @@ void ISNewNumber(const char * dev, const char * name, double values[], char * na
 void ISNewBLOB(const char * dev, const char * name, int sizes[], int blobsizes[], char * blobs[], char * formats[],
                char * names[], int n)
 {
-    INDI_UNUSED(dev);
-    INDI_UNUSED(name);
-    INDI_UNUSED(sizes);
-    INDI_UNUSED(blobsizes);
-    INDI_UNUSED(blobs);
-    INDI_UNUSED(formats);
-    INDI_UNUSED(names);
-    INDI_UNUSED(n);
+    skyPointer->ISNewBLOB(dev, name, sizes, blobsizes, blobs, formats, names, n);
 }
 
 void ISSnoopDevice(XMLEle * root)
@@ -56,10 +47,6 @@ void ISSnoopDevice(XMLEle * root)
 
 SkyPointer::SkyPointer()
 {
-    //currentRA  = ln_get_apparent_sidereal_time(ln_get_julian_from_sys());
-    currentRA  = 0;
-    currentDEC = 90;
-
     // We add an additional debug level so we can log verbose scope status
     DBG_SCOPE = INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE");
 
@@ -70,61 +57,164 @@ bool SkyPointer::initProperties()
 {
     INDI::Telescope::initProperties();
 
+    ScopeParametersN[0].value = 10;     // diameter
+    ScopeParametersN[1].value = 100;    // focal length
+    ScopeParametersN[2].value = 10;     // guide scope diameter
+    ScopeParametersN[3].value = 100;    // guide scope focal length
+
     IUFillText(&FirmwareT[0], "Version", "", 0);
-    IUFillTextVector(&FirmwareTP, FirmwareT, 1, getDeviceName(),
-                     "Firmware Info", "", "Device Info", IP_RO, 0, IPS_IDLE);
+    IUFillTextVector(&FirmwareTP, FirmwareT, 1, getDeviceName(), "Firmware Info",
+            "", "Device Info", IP_RO, 0, IPS_IDLE);
+
+    IUFillSwitch(&LaserS[0], "On", "", ISS_OFF);
+    IUFillSwitch(&LaserS[1], "Off", "", ISS_OFF);
+    IUFillSwitchVector(&LaserSP, LaserS, 2, getDeviceName(), "Laser", "",
+            MAIN_CONTROL_TAB, IP_WO, ISR_1OFMANY, 0, IPS_IDLE);
 
     addDebugControl();
+
+    // Add alignment properties
+    InitAlignmentProperties(this);
 
     return true;
 }
 
-void SkyPointer::ISGetProperties(const char * dev)
+bool SkyPointer::Connect()
 {
-    if (dev != nullptr && strcmp(dev, getDeviceName()) != 0)
-        return;
+    if (!INDI::Telescope::Connect())
+        return false;
 
-    INDI::Telescope::ISGetProperties(dev);
-
-    if (isConnected())
-    {
-        defineText(&FirmwareTP);
+    if (!get_skypointer_version(PortFD, fw_version)) {
+        DEBUG(INDI::Logger::DBG_WARNING, "Failed to retrive firmware information.");
+        return false;
     }
+    if (!skypointer_home(PortFD)) {
+        DEBUG(INDI::Logger::DBG_WARNING, "Failed to home SkyPointer.");
+        return false;
+    }
+    SetTimer(POLLMS);
+
+    return true;
+}
+
+bool SkyPointer::Disconnect()
+{
+    if (!skypointer_quit(PortFD)) {
+        DEBUG(INDI::Logger::DBG_WARNING, "Failed to power SkyPointer off.");
+        return false;
+    }
+    return INDI::Telescope::Disconnect();
+}
+
+bool SkyPointer::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+{
+    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
+        ProcessAlignmentNumberProperties(this, name, values, names, n);
+
+    return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
+}
+
+bool SkyPointer::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
+{
+    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
+    {
+        ProcessAlignmentSwitchProperties(this, name, states, names, n);
+
+        if (strcmp(name, LaserSP.name) == 0)
+        {
+            IUUpdateSwitch(&LaserSP, states, names, n);
+            set_skypointer_laser(PortFD, (LaserS[0].s == ISS_ON));
+            LaserSP.s = IPS_OK;
+            IDSetSwitch(&LaserSP, nullptr);
+            return true;
+        }
+    }
+
+    return INDI::Telescope::ISNewSwitch(dev, name, states, names, n);
+}
+
+bool SkyPointer::ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
+{
+    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
+        ProcessAlignmentTextProperties(this, name, texts, names, n);
+
+    return INDI::Telescope::ISNewText(dev, name, texts, names, n);
+}
+
+bool SkyPointer::ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[],
+                         char *formats[], char *names[], int n)
+{
+    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
+        ProcessAlignmentBLOBProperties(this, name, sizes, blobsizes, blobs, formats, names, n);
+
+    return INDI::Telescope::ISNewBLOB(dev, name, sizes, blobsizes, blobs, formats, names, n);
 }
 
 bool SkyPointer::updateProperties()
 {
-    char version[16];
-
     if (isConnected())
     {
-        if (get_skypointer_version(PortFD, version))
-        {
-            IUSaveText(&FirmwareT[0], version);
-            defineText(&FirmwareTP);
-        }
-        else
-        {
-            DEBUG(INDI::Logger::DBG_WARNING, "Failed to retrive firmware information.");
-            return false;
-        }
+        IUSaveText(&FirmwareT[0], fw_version);
+        defineText(&FirmwareTP);
+        defineSwitch(&LaserSP);
         INDI::Telescope::updateProperties();
     }
     else
     {
         INDI::Telescope::updateProperties();
         deleteProperty(FirmwareTP.name);
+        deleteProperty(LaserSP.name);
     }
     return true;
 }
-
 
 const char * SkyPointer::getDefaultName()
 {
     return "SkyPointer";
 }
 
+bool SkyPointer::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
+{
+    int steps = (dir == DIRECTION_NORTH) ? STEPS_PER_REV/4 : -STEPS_PER_REV/4;
+    int st = (command == MOTION_START);
+    DEBUGF(INDI::Logger::DBG_SESSION, "Moving NS: steps=%d st=%d", steps, st);
+
+    if (command == MOTION_START) {
+        return skypointer_move(PortFD, 0, steps);
+    }
+    return skypointer_stop(PortFD);
+}
+
+bool SkyPointer::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
+{
+    int steps = (dir == DIRECTION_WEST) ? STEPS_PER_REV : -STEPS_PER_REV;
+    int st = (command == MOTION_START);
+    DEBUGF(INDI::Logger::DBG_SESSION, "Moving WE: steps=%d st=%d", steps, st);
+
+    if (command == MOTION_START) {
+        return skypointer_move(PortFD, steps, 0);
+    }
+    return skypointer_stop(PortFD);
+}
+
 bool SkyPointer::Goto(double ra, double dec)
+{
+    targetRA  = ra;
+    targetDEC = dec;
+    char RAStr[64]= {0}, DecStr[64]= {0};
+    //ln_hrz_posn AltAz = {0, 0},
+
+    // Parse the RA/DEC into strings
+    fs_sexa(RAStr, targetRA, 2, 3600);
+    fs_sexa(DecStr, targetDEC, 2, 3600);
+
+    // Mark state as slewing
+    TrackState = SCOPE_SLEWING;
+    DEBUGF(INDI::Logger::DBG_SESSION, "Slewing to RA: %s - DEC: %s", RAStr, DecStr);
+    return true;
+}
+
+bool SkyPointer::Sync(double ra, double dec)
 {
     targetRA  = ra;
     targetDEC = dec;
@@ -134,39 +224,24 @@ bool SkyPointer::Goto(double ra, double dec)
     fs_sexa(RAStr, targetRA, 2, 3600);
     fs_sexa(DecStr, targetDEC, 2, 3600);
 
-    // Mark state as slewing
-    TrackState = SCOPE_SLEWING;
-
-    // Inform client we are slewing to a new position
-    DEBUGF(INDI::Logger::DBG_SESSION, "Slewing to RA: %s - DEC: %s", RAStr, DecStr);
-
-    // Success!
-    return true;
-}
-
-bool SkyPointer::Sync(double ra, double dec)
-{
-    INDI_UNUSED(ra);
-    INDI_UNUSED(dec);
-    // Success!
+    TrackState = SCOPE_IDLE;
+    DEBUGF(INDI::Logger::DBG_SESSION, "Syncing with RA: %s - DEC: %s", RAStr, DecStr);
     return true;
 }
 
 bool SkyPointer::Abort()
 {
+        if (!skypointer_stop(PortFD)) {
+            DEBUG(INDI::Logger::DBG_ERROR, "Failed to stop skypointer.");
+            return false;
+        }
     return true;
 }
 
 bool SkyPointer::ReadScopeStatus()
 {
-    static struct timeval ltv
-    {
-        0, 0
-    };
-    struct timeval tv
-    {
-        0, 0
-    };
+    static struct timeval ltv { 0, 0 };
+    struct timeval tv { 0, 0 };
     double dt = 0, da_ra = 0, da_dec = 0, dx = 0, dy = 0;
     int nlocked;
 
@@ -179,13 +254,14 @@ bool SkyPointer::ReadScopeStatus()
     dt  = tv.tv_sec - ltv.tv_sec + (tv.tv_usec - ltv.tv_usec) / 1e6;
     ltv = tv;
 
+    DEBUGF(INDI::Logger::DBG_SESSION, "ReadScopeStatus. dt=%f", dt);
+
     // Calculate how much we moved since last time
     da_ra  = SLEW_RATE * dt;
     da_dec = SLEW_RATE * dt;
 
     /* Process per current state. We check the state of EQUATORIAL_EOD_COORDS_REQUEST and act acoordingly */
-    switch (TrackState)
-    {
+    switch (TrackState) {
         case SCOPE_SLEWING:
             // Wait until we are "locked" into positon for both RA & DEC axis
             nlocked = 0;

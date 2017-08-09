@@ -10,6 +10,10 @@
 #define SKYPOINTER_TIMEOUT 2
 #define MAX_MSG_SIZE 16
 
+#if IS_BIG_ENDIAN
+#error "This code works only in little-endian machines"
+#endif
+
 char sp_name[MAXINDIDEVICE] = "SkyPointer";
 
 
@@ -135,14 +139,16 @@ bool get_calib_reg(int fd, int n, float * val)
     char cmd[MAX_MSG_SIZE];
     char resp[MAX_MSG_SIZE];
     int resp_len = 0;
+    int intval = 0;
 
     sprintf(cmd, "R %d\r", n);
     if (!send_cmd(fd, (const char *)cmd, resp, &resp_len))
     {
         return false;
     }
-    //TODO
-    *val = 0.0;
+
+    sscanf(resp, "R %x", &intval);
+    *val = *((float *) &intval);
     return true;
 }
 
@@ -153,21 +159,21 @@ bool set_calib_reg(int fd, int n, float val)
     return send_simple_cmd(fd, (const char *)cmd);
 }
 
-bool get_skypointer_calib(int fd, float * calib)
+bool get_skypointer_calib(int fd, skypointerCalib * calib)
 {
     for (int i=0; i<N_CALIB_REGS; i++)
     {
-        if (!get_calib_reg(fd, i, &calib[i]))
+        if (!get_calib_reg(fd, i, &calib->z[i]))
             return false;
     }
     return true;
 }
 
-bool set_skypointer_calib(int fd, float * calib)
+bool set_skypointer_calib(int fd, skypointerCalib * calib)
 {
     for (int i=0; i<N_CALIB_REGS; i++)
     {
-        if (!set_calib_reg(fd, i, calib[i]))
+        if (!set_calib_reg(fd, i, calib->z[i]))
             return false;
     }
     return true;

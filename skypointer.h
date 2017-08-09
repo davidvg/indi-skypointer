@@ -1,14 +1,17 @@
 #pragma once
 
-#include "inditelescope.h"
+#include <inditelescope.h>
+#include <alignment/AlignmentSubsystemForDrivers.h>
+#include "skypointer_driver.h"
 
-class SkyPointer : public INDI::Telescope
+class SkyPointer : public INDI::Telescope, public INDI::AlignmentSubsystem::AlignmentSubsystemForDrivers
 {
     public:
         SkyPointer();
-        virtual void ISGetProperties(const char * dev);
 
     protected:
+        bool Connect();
+        bool Disconnect();
         const char * getDefaultName();
         bool initProperties();
         bool updateProperties();
@@ -17,16 +20,32 @@ class SkyPointer : public INDI::Telescope
         bool ReadScopeStatus();
         bool Goto(double, double);
         bool Sync(double, double);
+        bool MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command);
+        bool MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command);
         bool Abort();
 
         IText FirmwareT[1];
         ITextVectorProperty FirmwareTP;
+        ISwitch LaserS[2];
+        ISwitchVectorProperty LaserSP;
 
     private:
         double currentRA;
         double currentDEC;
         double targetRA;
         double targetDEC;
+
+        friend void ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n);
+        virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+        friend void ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n);
+        virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
+        friend void ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n);
+        virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
+        friend void ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n);
+        virtual bool ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n) override;
+
+        char fw_version[16];
+        skypointerCalib calib;
 
         unsigned int DBG_SCOPE;
 };
