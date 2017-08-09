@@ -1,29 +1,32 @@
 #pragma once
 
-#include <inditelescope.h>
+#include "inditelescope.h"
 
 class SkyPointer : public INDI::Telescope
 {
-  public:
-    SkyPointer();
+    public:
+        SkyPointer();
+        virtual void ISGetProperties(const char * dev);
 
-  protected:
-    // General device functions
-    bool Connect();
-    bool Disconnect();
-    const char *getDefaultName();
-    bool initProperties();
+    protected:
+        const char * getDefaultName();
+        bool initProperties();
+        bool updateProperties();
 
-    // Telescope specific functions
-    bool ReadScopeStatus();
-    bool Goto(double, double);
-    bool Abort();
+        // Telescope specific functions
+        bool ReadScopeStatus();
+        bool Goto(double, double);
+        bool Sync(double, double);
+        bool Abort();
 
-  private:
-    double currentRA;
-    double currentDEC;
-    double targetRA;
-    double targetDEC;
+        IText FirmwareT[1];
+        ITextVectorProperty FirmwareTP;
 
-    unsigned int DBG_SCOPE;
+    private:
+        double currentRA;
+        double currentDEC;
+        double targetRA;
+        double targetDEC;
+
+        unsigned int DBG_SCOPE;
 };

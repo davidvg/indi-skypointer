@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 2.4.7)
 PROJECT(skypointer CXX C)
 
 LIST(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/")
-LIST(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../cmake_modules/")
 
 include(GNUInstallDirs)
 
@@ -26,7 +25,9 @@ include(CMakeCommon)
 ############# SKYPOINTER ###############
 set(skypointer_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/skypointer.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/skypointer_driver.cpp
 )
+
 
 add_executable(indi_skypointer ${skypointer_SRCS})
 

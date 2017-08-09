@@ -17,7 +17,9 @@ Installation
 
 You must have CMake >= 2.4.7 in order to build this package.
 
-    $ cmake .
+    $ mkdir build
+    $ cd build
+    $ cmake ..
     $ make
     $ sudo make install
 

@@ -1,5 +1,9 @@
-#include "skypointer.h"
 #include "indicom.h"
+#include "skypointer.h"
+#include "skypointer_driver.h"
+
+#include <libnova/sidereal_time.h>
+#include <libnova/julian_day.h>
 
 #include <cmath>
 #include <memory>
@@ -11,117 +15,120 @@ const int POLLMS    = 250;      /* poll period, ms */
 
 std::unique_ptr<SkyPointer> skyPointer(new SkyPointer());
 
-/**************************************************************************************
-** Return properties of device.
-***************************************************************************************/
-void ISGetProperties(const char *dev)
+
+void ISGetProperties(const char * dev)
 {
     skyPointer->ISGetProperties(dev);
 }
 
-/**************************************************************************************
-** Process new switch from client
-***************************************************************************************/
-void ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
+void ISNewSwitch(const char * dev, const char * name, ISState * states, char * names[], int n)
 {
     skyPointer->ISNewSwitch(dev, name, states, names, n);
 }
 
-/**************************************************************************************
-** Process new text from client
-***************************************************************************************/
-void ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
+void ISNewText(const char * dev, const char * name, char * texts[], char * names[], int n)
 {
     skyPointer->ISNewText(dev, name, texts, names, n);
 }
 
-/**************************************************************************************
-** Process new number from client
-***************************************************************************************/
-void ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+void ISNewNumber(const char * dev, const char * name, double values[], char * names[], int n)
 {
     skyPointer->ISNewNumber(dev, name, values, names, n);
 }
 
-/**************************************************************************************
-** Process new blob from client
-***************************************************************************************/
-void ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[],
-               char *names[], int n)
+void ISNewBLOB(const char * dev, const char * name, int sizes[], int blobsizes[], char * blobs[], char * formats[],
+               char * names[], int n)
 {
-    skyPointer->ISNewBLOB(dev, name, sizes, blobsizes, blobs, formats, names, n);
+    INDI_UNUSED(dev);
+    INDI_UNUSED(name);
+    INDI_UNUSED(sizes);
+    INDI_UNUSED(blobsizes);
+    INDI_UNUSED(blobs);
+    INDI_UNUSED(formats);
+    INDI_UNUSED(names);
+    INDI_UNUSED(n);
 }
 
-/**************************************************************************************
-** Process snooped property from another driver
-***************************************************************************************/
-void ISSnoopDevice(XMLEle *root)
+void ISSnoopDevice(XMLEle * root)
 {
     INDI_UNUSED(root);
 }
 
 SkyPointer::SkyPointer()
 {
+    //currentRA  = ln_get_apparent_sidereal_time(ln_get_julian_from_sys());
     currentRA  = 0;
     currentDEC = 90;
 
     // We add an additional debug level so we can log verbose scope status
     DBG_SCOPE = INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE");
 
-    SetTelescopeCapability(TELESCOPE_CAN_ABORT);
+    SetTelescopeCapability(TELESCOPE_CAN_SYNC |TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT);
 }
 
-/**************************************************************************************
-** We init our properties here. The only thing we want to init are the Debug controls
-***************************************************************************************/
 bool SkyPointer::initProperties()
 {
-    // ALWAYS call initProperties() of parent first
     INDI::Telescope::initProperties();
+
+    IUFillText(&FirmwareT[0], "Version", "", 0);
+    IUFillTextVector(&FirmwareTP, FirmwareT, 1, getDeviceName(),
+                     "Firmware Info", "", "Device Info", IP_RO, 0, IPS_IDLE);
 
     addDebugControl();
 
     return true;
 }
 
-/**************************************************************************************
-** Client is asking us to establish connection to the device
-***************************************************************************************/
-bool SkyPointer::Connect()
+void SkyPointer::ISGetProperties(const char * dev)
 {
-    DEBUG(INDI::Logger::DBG_SESSION, "SkyPointer connected successfully!");
+    if (dev != nullptr && strcmp(dev, getDeviceName()) != 0)
+        return;
 
-    // Let's set a timer that checks telescopes status every POLLMS milliseconds.
-    SetTimer(POLLMS);
+    INDI::Telescope::ISGetProperties(dev);
 
+    if (isConnected())
+    {
+        defineText(&FirmwareTP);
+    }
+}
+
+bool SkyPointer::updateProperties()
+{
+    char version[16];
+
+    if (isConnected())
+    {
+        if (get_skypointer_version(PortFD, version))
+        {
+            IUSaveText(&FirmwareT[0], version);
+            defineText(&FirmwareTP);
+        }
+        else
+        {
+            DEBUG(INDI::Logger::DBG_WARNING, "Failed to retrive firmware information.");
+            return false;
+        }
+        INDI::Telescope::updateProperties();
+    }
+    else
+    {
+        INDI::Telescope::updateProperties();
+        deleteProperty(FirmwareTP.name);
+    }
     return true;
 }
 
-/**************************************************************************************
-** Client is asking us to terminate connection to the device
-***************************************************************************************/
-bool SkyPointer::Disconnect()
-{
-    DEBUG(INDI::Logger::DBG_SESSION, "SkyPointer disconnected successfully!");
-    return true;
-}
 
-/**************************************************************************************
-** INDI is asking us for our default device name
-***************************************************************************************/
-const char *SkyPointer::getDefaultName()
+const char * SkyPointer::getDefaultName()
 {
     return "SkyPointer";
 }
 
-/**************************************************************************************
-** Client is asking us to slew to a new position
-***************************************************************************************/
 bool SkyPointer::Goto(double ra, double dec)
 {
     targetRA  = ra;
     targetDEC = dec;
-    char RAStr[64]={0}, DecStr[64]={0};
+    char RAStr[64]= {0}, DecStr[64]= {0};
 
     // Parse the RA/DEC into strings
     fs_sexa(RAStr, targetRA, 2, 3600);
@@ -137,21 +144,29 @@ bool SkyPointer::Goto(double ra, double dec)
     return true;
 }
 
-/**************************************************************************************
-** Client is asking us to abort our motion
-***************************************************************************************/
+bool SkyPointer::Sync(double ra, double dec)
+{
+    INDI_UNUSED(ra);
+    INDI_UNUSED(dec);
+    // Success!
+    return true;
+}
+
 bool SkyPointer::Abort()
 {
     return true;
 }
 
-/**************************************************************************************
-** Client is asking us to report telescope status
-***************************************************************************************/
 bool SkyPointer::ReadScopeStatus()
 {
-    static struct timeval ltv { 0, 0 };
-    struct timeval tv { 0, 0 };
+    static struct timeval ltv
+    {
+        0, 0
+    };
+    struct timeval tv
+    {
+        0, 0
+    };
     double dt = 0, da_ra = 0, da_dec = 0, dx = 0, dy = 0;
     int nlocked;
 
@@ -221,7 +236,7 @@ bool SkyPointer::ReadScopeStatus()
             break;
     }
 
-    char RAStr[64]={0}, DecStr[64]={0};
+    char RAStr[64]= {0}, DecStr[64]= {0};
 
     // Parse the RA/DEC into strings
     fs_sexa(RAStr, currentRA, 2, 3600);
