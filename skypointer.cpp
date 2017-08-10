@@ -1,9 +1,11 @@
-#include "indicom.h"
 #include "skypointer.h"
-#include "skypointer_driver.h"
+#include "config.h"
 
 #include <cmath>
 #include <memory>
+
+#include <indicom.h>
+#include <skypointer_driver.h>
 
 using namespace INDI::AlignmentSubsystem;
 
@@ -42,15 +44,16 @@ void ISNewBLOB(const char * dev, const char * name, int sizes[], int blobsizes[]
 
 void ISSnoopDevice(XMLEle * root)
 {
-    INDI_UNUSED(root);
+    skyPointer->ISSnoopDevice(root);
 }
 
 SkyPointer::SkyPointer()
 {
     // We add an additional debug level so we can log verbose scope status
-    DBG_SCOPE = INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE");
+    DBG_SP = INDI::Logger::getInstance().addDebugLevel("SkyPointer Verbose", "SKYPOINTER");
 
     SetTelescopeCapability(TELESCOPE_CAN_SYNC |TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT);
+    setTelescopeConnection(CONNECTION_SERIAL);
 }
 
 bool SkyPointer::initProperties()
@@ -85,14 +88,14 @@ bool SkyPointer::Connect()
         return false;
 
     if (!get_skypointer_version(PortFD, fw_version)) {
-        DEBUG(INDI::Logger::DBG_WARNING, "Failed to retrive firmware information.");
+        DEBUG(INDI::Logger::DBG_ERROR, "Failed to retrive firmware information.");
         return false;
     }
     if (!skypointer_home(PortFD)) {
-        DEBUG(INDI::Logger::DBG_WARNING, "Failed to home SkyPointer.");
+        DEBUG(INDI::Logger::DBG_ERROR, "Failed to home SkyPointer.");
         return false;
     }
-    SetTimer(POLLMS);
+    //SetTimer(POLLMS);
 
     return true;
 }
@@ -100,7 +103,7 @@ bool SkyPointer::Connect()
 bool SkyPointer::Disconnect()
 {
     if (!skypointer_quit(PortFD)) {
-        DEBUG(INDI::Logger::DBG_WARNING, "Failed to power SkyPointer off.");
+        DEBUG(INDI::Logger::DBG_ERROR, "Failed to power SkyPointer off.");
         return false;
     }
     return INDI::Telescope::Disconnect();
@@ -177,7 +180,7 @@ bool SkyPointer::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 {
     int steps = (dir == DIRECTION_NORTH) ? STEPS_PER_REV/4 : -STEPS_PER_REV/4;
     int st = (command == MOTION_START);
-    DEBUGF(INDI::Logger::DBG_SESSION, "Moving NS: steps=%d st=%d", steps, st);
+    DEBUGF(DBG_SP, "Moving NS: steps=%d st=%d", steps, st);
 
     if (command == MOTION_START) {
         return skypointer_move(PortFD, 0, steps);
@@ -189,7 +192,7 @@ bool SkyPointer::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 {
     int steps = (dir == DIRECTION_WEST) ? STEPS_PER_REV : -STEPS_PER_REV;
     int st = (command == MOTION_START);
-    DEBUGF(INDI::Logger::DBG_SESSION, "Moving WE: steps=%d st=%d", steps, st);
+    DEBUGF(DBG_SP, "Moving WE: steps=%d st=%d", steps, st);
 
     if (command == MOTION_START) {
         return skypointer_move(PortFD, steps, 0);
@@ -202,7 +205,6 @@ bool SkyPointer::Goto(double ra, double dec)
     targetRA  = ra;
     targetDEC = dec;
     char RAStr[64]= {0}, DecStr[64]= {0};
-    //ln_hrz_posn AltAz = {0, 0},
 
     // Parse the RA/DEC into strings
     fs_sexa(RAStr, targetRA, 2, 3600);
@@ -210,22 +212,49 @@ bool SkyPointer::Goto(double ra, double dec)
 
     // Mark state as slewing
     TrackState = SCOPE_SLEWING;
-    DEBUGF(INDI::Logger::DBG_SESSION, "Slewing to RA: %s - DEC: %s", RAStr, DecStr);
+    DEBUGF(DBG_SP, "Slewing to RA: %s - DEC: %s", RAStr, DecStr);
     return true;
 }
 
 bool SkyPointer::Sync(double ra, double dec)
 {
-    targetRA  = ra;
-    targetDEC = dec;
-    char RAStr[64]= {0}, DecStr[64]= {0};
-
     // Parse the RA/DEC into strings
-    fs_sexa(RAStr, targetRA, 2, 3600);
-    fs_sexa(DecStr, targetDEC, 2, 3600);
+    char RAStr[64]={0}, DecStr[64]={0}, coordStr[64]={0};
+    fs_sexa(RAStr, ra, 2, 3600);
+    fs_sexa(DecStr, dec, 2, 3600);
+    sprintf(coordStr, "RA:%s DEC:%s", RAStr, DecStr);
 
-    TrackState = SCOPE_IDLE;
-    DEBUGF(INDI::Logger::DBG_SESSION, "Syncing with RA: %s - DEC: %s", RAStr, DecStr);
+    int az, alt;
+    if (!get_skypointer_pos(PortFD, &az, &alt)) {
+        DEBUG(INDI::Logger::DBG_ERROR, "Failed to get skypointer position.");
+    }
+    struct ln_hrz_posn AltAz;
+    AltAz.az = 360*double(az)/STEPS_PER_REV;
+    AltAz.alt = 360*double(alt)/STEPS_PER_REV;
+
+    AlignmentDatabaseEntry NewEntry;
+    NewEntry.ObservationJulianDate = ln_get_julian_from_sys();
+    NewEntry.RightAscension        = ra;
+    NewEntry.Declination           = dec;
+    NewEntry.TelescopeDirection    = TelescopeDirectionVectorFromAltitudeAzimuth(AltAz);
+    NewEntry.PrivateDataSize       = 0;
+
+    DEBUGF(DBG_SP, "Sync - Reference frame: %s", coordStr);
+
+    if (CheckForDuplicateSyncPoint(NewEntry)) {
+        DEBUGF(DBG_SP, "Sync - duplicate entry. %s", coordStr);
+        return false;
+    }
+
+    GetAlignmentDatabase().push_back(NewEntry);
+
+    // Tell the client about size change
+    UpdateSize();
+
+    // Tell the math plugin to reinitialise
+    Initialise(this);
+    DEBUGF(DBG_SP, "Sync - new entry added. %s", coordStr);
+    ReadScopeStatus();
     return true;
 }
 
@@ -240,6 +269,16 @@ bool SkyPointer::Abort()
 
 bool SkyPointer::ReadScopeStatus()
 {
+    ln_hrz_posn AltAz;
+    int az, alt;
+
+    if (!get_skypointer_pos(PortFD, &az, &alt)) {
+        DEBUG(INDI::Logger::DBG_ERROR, "Failed to get skypointer position.");
+    }
+    AltAz.az = 360*double(az)/STEPS_PER_REV;
+    AltAz.alt = 360*double(alt)/STEPS_PER_REV;
+    TelescopeDirectionVector TDV = TelescopeDirectionVectorFromAltitudeAzimuth(AltAz);
+
     static struct timeval ltv { 0, 0 };
     struct timeval tv { 0, 0 };
     double dt = 0, da_ra = 0, da_dec = 0, dx = 0, dy = 0;
@@ -254,7 +293,8 @@ bool SkyPointer::ReadScopeStatus()
     dt  = tv.tv_sec - ltv.tv_sec + (tv.tv_usec - ltv.tv_usec) / 1e6;
     ltv = tv;
 
-    DEBUGF(INDI::Logger::DBG_SESSION, "ReadScopeStatus. dt=%f", dt);
+    //DEBUGF(DBG_SP, "ReadScopeStatus. dt=%f az=%f alt=%f", dt, AltAz.az, AltAz.alt);
+    DEBUGF(DBG_SP, "MovementNSSP.s: %d MovementWESP.s: %d", MovementNSSP.s, MovementWESP.s);
 
     // Calculate how much we moved since last time
     da_ra  = SLEW_RATE * dt;
@@ -304,7 +344,7 @@ bool SkyPointer::ReadScopeStatus()
                 // Let's set state to TRACKING
                 TrackState = SCOPE_TRACKING;
 
-                DEBUG(INDI::Logger::DBG_SESSION, "Telescope slew is complete. Tracking...");
+                DEBUG(DBG_SP, "Telescope slew is complete. Tracking...");
             }
             break;
 
@@ -318,8 +358,14 @@ bool SkyPointer::ReadScopeStatus()
     fs_sexa(RAStr, currentRA, 2, 3600);
     fs_sexa(DecStr, currentDEC, 2, 3600);
 
-    DEBUGF(DBG_SCOPE, "Current RA: %s Current DEC: %s", RAStr, DecStr);
+    DEBUGF(DBG_SP, "Current RA: %s Current DEC: %s", RAStr, DecStr);
 
     NewRaDec(currentRA, currentDEC);
+    return true;
+}
+
+bool SkyPointer::updateLocation(double latitude, double longitude, double elevation)
+{
+    UpdateLocation(latitude, longitude, elevation);
     return true;
 }

@@ -1,8 +1,10 @@
+
 #pragma once
+
+#include "skypointer_driver.h"
 
 #include <inditelescope.h>
 #include <alignment/AlignmentSubsystemForDrivers.h>
-#include "skypointer_driver.h"
 
 class SkyPointer : public INDI::Telescope, public INDI::AlignmentSubsystem::AlignmentSubsystemForDrivers
 {
@@ -43,9 +45,10 @@ class SkyPointer : public INDI::Telescope, public INDI::AlignmentSubsystem::Alig
         virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
         friend void ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n);
         virtual bool ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n) override;
+        virtual bool updateLocation(double latitude, double longitude, double elevation) override;
 
         char fw_version[16];
         skypointerCalib calib;
 
-        unsigned int DBG_SCOPE;
+        unsigned int DBG_SP;
 };
