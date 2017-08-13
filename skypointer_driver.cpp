@@ -60,17 +60,17 @@ bool send_simple_cmd(int fd, const char * cmd)
     return send_cmd(fd, cmd, resp, &resp_len);
 }
 
-bool skypointer_goto(int fd, int az, int alt)
+bool skypointer_goto(int fd, int az, int alt, int speed)
 {
     char cmd[MAX_MSG_SIZE];
-    sprintf(cmd, "G %d %d\r", az, alt);
+    sprintf(cmd, "G %d %d %d\r", az, alt, speed);
     return send_simple_cmd(fd, (const char *)cmd);
 }
 
-bool skypointer_move(int fd, int az, int alt)
+bool skypointer_move(int fd, int az, int alt, int speed)
 {
     char cmd[MAX_MSG_SIZE];
-    sprintf(cmd, "M %d %d\r", az, alt);
+    sprintf(cmd, "M %d %d %d\r", az, alt, speed);
     return send_simple_cmd(fd, (const char *)cmd);
 }
 

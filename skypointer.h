@@ -36,6 +36,9 @@ class SkyPointer : public INDI::Telescope, public INDI::AlignmentSubsystem::Alig
         double currentDEC;
         double targetRA;
         double targetDEC;
+        char fwVersion[16];
+        uint8_t motorSpeed;
+        skypointerCalib calib;
 
         friend void ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n);
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
@@ -46,9 +49,7 @@ class SkyPointer : public INDI::Telescope, public INDI::AlignmentSubsystem::Alig
         friend void ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n);
         virtual bool ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[], char *formats[], char *names[], int n) override;
         virtual bool updateLocation(double latitude, double longitude, double elevation) override;
-
-        char fw_version[16];
-        skypointerCalib calib;
+        int updateMotorSpeed();
 
         unsigned int DBG_SP;
 };

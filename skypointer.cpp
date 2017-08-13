@@ -52,13 +52,14 @@ SkyPointer::SkyPointer()
     // We add an additional debug level so we can log verbose scope status
     DBG_SP = INDI::Logger::getInstance().addDebugLevel("SkyPointer Verbose", "SKYPOINTER");
 
-    SetTelescopeCapability(TELESCOPE_CAN_SYNC |TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT);
+    SetTelescopeCapability(TELESCOPE_CAN_SYNC |TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT, 4);
     setTelescopeConnection(CONNECTION_SERIAL);
 }
 
 bool SkyPointer::initProperties()
 {
     INDI::Telescope::initProperties();
+    motorSpeed = 200;
 
     ScopeParametersN[0].value = 10;     // diameter
     ScopeParametersN[1].value = 100;    // focal length
@@ -74,6 +75,13 @@ bool SkyPointer::initProperties()
     IUFillSwitchVector(&LaserSP, LaserS, 2, getDeviceName(), "Laser", "",
             MAIN_CONTROL_TAB, IP_WO, ISR_1OFMANY, 0, IPS_IDLE);
 
+    IUFillSwitch(&SlewRateS[SLEW_GUIDE], "SLEW_GUIDE", "Guide", ISS_OFF);
+    IUFillSwitch(&SlewRateS[SLEW_CENTERING], "SLEW_CENTERING", "Centering", ISS_OFF);
+    IUFillSwitch(&SlewRateS[SLEW_FIND], "SLEW_FIND", "Find", ISS_OFF);
+    IUFillSwitch(&SlewRateS[SLEW_MAX], "SLEW_MAX", "Max", ISS_ON);
+    IUFillSwitchVector(&SlewRateSP, SlewRateS, 4, getDeviceName(), "TELESCOPE_SLEW_RATE", "Slew Rate", MOTION_TAB,
+                       IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
+
     addDebugControl();
 
     // Add alignment properties
@@ -87,7 +95,7 @@ bool SkyPointer::Connect()
     if (!INDI::Telescope::Connect())
         return false;
 
-    if (!get_skypointer_version(PortFD, fw_version)) {
+    if (!get_skypointer_version(PortFD, fwVersion)) {
         DEBUG(INDI::Logger::DBG_ERROR, "Failed to retrive firmware information.");
         return false;
     }
@@ -123,7 +131,16 @@ bool SkyPointer::ISNewSwitch(const char *dev, const char *name, ISState *states,
     {
         ProcessAlignmentSwitchProperties(this, name, states, names, n);
 
-        if (strcmp(name, LaserSP.name) == 0)
+        // Slew rate
+        if (strcmp(name, SlewRateSP.name) == 0)
+        {
+            if (IUUpdateSwitch(&SlewRateSP, states, names, n) < 0)
+                return false;
+
+            SlewRateSP.s = IPS_OK;
+            IDSetSwitch(&SlewRateSP, nullptr);
+        }
+        else if (strcmp(name, LaserSP.name) == 0)
         {
             IUUpdateSwitch(&LaserSP, states, names, n);
             set_skypointer_laser(PortFD, (LaserS[0].s == ISS_ON));
@@ -157,7 +174,7 @@ bool SkyPointer::updateProperties()
 {
     if (isConnected())
     {
-        IUSaveText(&FirmwareT[0], fw_version);
+        IUSaveText(&FirmwareT[0], fwVersion);
         defineText(&FirmwareTP);
         defineSwitch(&LaserSP);
         INDI::Telescope::updateProperties();
@@ -176,14 +193,34 @@ const char * SkyPointer::getDefaultName()
     return "SkyPointer";
 }
 
+
+int SkyPointer::updateMotorSpeed()
+{
+    int rate = IUFindOnSwitchIndex(&SlewRateSP);
+
+    switch (rate) {
+        case SLEW_GUIDE:
+            motorSpeed = 4;
+            break;
+        case SLEW_CENTERING:
+            motorSpeed = 20;
+            break;
+        case SLEW_FIND:
+            motorSpeed = 80;
+            break;
+        default:
+            motorSpeed = 200;
+    }
+    return motorSpeed;
+}
+
 bool SkyPointer::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 {
     int steps = (dir == DIRECTION_NORTH) ? STEPS_PER_REV/4 : -STEPS_PER_REV/4;
-    int st = (command == MOTION_START);
-    DEBUGF(DBG_SP, "Moving NS: steps=%d st=%d", steps, st);
 
     if (command == MOTION_START) {
-        return skypointer_move(PortFD, 0, steps);
+        updateMotorSpeed();
+        return skypointer_move(PortFD, 0, steps, motorSpeed);
     }
     return skypointer_stop(PortFD);
 }
@@ -191,11 +228,10 @@ bool SkyPointer::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 bool SkyPointer::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 {
     int steps = (dir == DIRECTION_WEST) ? STEPS_PER_REV : -STEPS_PER_REV;
-    int st = (command == MOTION_START);
-    DEBUGF(DBG_SP, "Moving WE: steps=%d st=%d", steps, st);
 
     if (command == MOTION_START) {
-        return skypointer_move(PortFD, steps, 0);
+        updateMotorSpeed();
+        return skypointer_move(PortFD, steps, 0, motorSpeed);
     }
     return skypointer_stop(PortFD);
 }
@@ -238,8 +274,6 @@ bool SkyPointer::Sync(double ra, double dec)
     NewEntry.Declination           = dec;
     NewEntry.TelescopeDirection    = TelescopeDirectionVectorFromAltitudeAzimuth(AltAz);
     NewEntry.PrivateDataSize       = 0;
-
-    DEBUGF(DBG_SP, "Sync - Reference frame: %s", coordStr);
 
     if (CheckForDuplicateSyncPoint(NewEntry)) {
         DEBUGF(DBG_SP, "Sync - duplicate entry. %s", coordStr);
@@ -294,7 +328,6 @@ bool SkyPointer::ReadScopeStatus()
     ltv = tv;
 
     //DEBUGF(DBG_SP, "ReadScopeStatus. dt=%f az=%f alt=%f", dt, AltAz.az, AltAz.alt);
-    DEBUGF(DBG_SP, "MovementNSSP.s: %d MovementWESP.s: %d", MovementNSSP.s, MovementWESP.s);
 
     // Calculate how much we moved since last time
     da_ra  = SLEW_RATE * dt;
@@ -366,6 +399,7 @@ bool SkyPointer::ReadScopeStatus()
 
 bool SkyPointer::updateLocation(double latitude, double longitude, double elevation)
 {
+    DEBUGF(DBG_SP, "UpdateLocation: lat: %f long: %f, ele: %f", latitude, longitude, elevation);
     UpdateLocation(latitude, longitude, elevation);
     return true;
 }
