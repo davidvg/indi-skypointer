@@ -200,26 +200,28 @@ int SkyPointer::updateMotorSpeed()
 
     switch (rate) {
         case SLEW_GUIDE:
-            motorSpeed = 4;
+            motorSpeed = GUIDE_SPEED;
             break;
         case SLEW_CENTERING:
-            motorSpeed = 20;
+            motorSpeed = CENTERING_SPEED;
             break;
         case SLEW_FIND:
-            motorSpeed = 80;
+            motorSpeed = FIND_SPEED;
             break;
         default:
-            motorSpeed = 200;
+            motorSpeed = SLEW_SPEED;
     }
     return motorSpeed;
 }
 
 bool SkyPointer::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 {
-    int steps = (dir == DIRECTION_NORTH) ? STEPS_PER_REV/4 : -STEPS_PER_REV/4;
+    int steps = (dir == DIRECTION_NORTH) ? 1 : -1;
 
     if (command == MOTION_START) {
         updateMotorSpeed();
+        if (motorSpeed != GUIDE_SPEED)
+            steps *= STEPS_PER_REV/4;
         return skypointer_move(PortFD, 0, steps, motorSpeed);
     }
     return skypointer_stop(PortFD);
@@ -227,10 +229,12 @@ bool SkyPointer::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 
 bool SkyPointer::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 {
-    int steps = (dir == DIRECTION_WEST) ? STEPS_PER_REV : -STEPS_PER_REV;
+    int steps = (dir == DIRECTION_NORTH) ? 1 : -1;
 
     if (command == MOTION_START) {
         updateMotorSpeed();
+        if (motorSpeed != GUIDE_SPEED)
+            steps *= STEPS_PER_REV/4;
         return skypointer_move(PortFD, steps, 0, motorSpeed);
     }
     return skypointer_stop(PortFD);

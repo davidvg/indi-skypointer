@@ -5,6 +5,11 @@
 #define N_CALIB_REGS 3
 #define STEPS_PER_REV 3200
 
+#define GUIDE_SPEED 4
+#define CENTERING_SPEED 20
+#define FIND_SPEED 80
+#define SLEW_SPEED 200
+
 typedef struct {
     float z[N_CALIB_REGS];
 } skypointerCalib;
